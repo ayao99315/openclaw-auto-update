@@ -1,11 +1,18 @@
 ---
 name: ayao-updater
-description: Automatically update OpenClaw and all installed skills on a schedule. Use when: (1) setting up automatic updates for OpenClaw or skills, (2) running a manual update check, (3) configuring update schedule, skip lists, or pre-release filtering, (4) user says "auto update", "schedule updates", "keep openclaw updated", "update skills automatically". Handles npm/pnpm/yarn detection, locally-modified skill protection, conflict avoidance, and Telegram notifications on completion or failure.
+description: Automatically update OpenClaw and all installed skills on a schedule. Use when: (1) setting up automatic updates for OpenClaw or skills, (2) running a manual update check, (3) configuring update schedule, skip lists, or pre-release filtering, (4) user says "auto update", "schedule updates", "keep openclaw updated", "update skills automatically". Handles locally-modified skill protection, conflict avoidance, pre-release filtering, and Telegram notifications on completion or failure.
 ---
 
 # OpenClaw Auto Update
 
 Keeps OpenClaw and installed ClawHub skills up to date automatically.
+
+## Prerequisites
+
+- `openclaw` CLI — required for `openclaw update`, `openclaw gateway restart`, and notifications
+- `clawhub` CLI — required for `clawhub list`, `clawhub inspect`, and `clawhub update`
+- `python3` — required for loading `config.json`
+- `bash` 4+ — required by the shell scripts for array-based state handling
 
 ## Quick Start
 
@@ -46,14 +53,15 @@ See `references/config-schema.md` for all options and examples.
 
 ## What It Does
 
-1. **Detects package manager** — auto-detects npm / pnpm / yarn by tracing the `openclaw` binary path
-2. **Updates OpenClaw** — runs `<pm> install -g openclaw`
-3. **Updates skills** — runs `clawhub update <slug>` for each installed skill
-4. **Protects local changes** — skips skills with uncommitted git changes
-5. **Respects skip list** — never touches skills in `skipSkills`
-6. **Filters pre-releases** — skips alpha/beta/rc versions when `skipPreRelease: true`
-7. **Restarts gateway** — only if OpenClaw version actually changed
-8. **Notifies** — sends Telegram message on completion or failure
+1. **Loads JSON config** — reads `config.json` with `python3` and merges defaults
+2. **Updates OpenClaw** — runs `openclaw update --yes --no-restart` (or `openclaw update --dry-run --yes --no-restart` in preview mode)
+3. **Finds installed skills** — enumerates skills via `clawhub list`, with workspace directory fallback
+4. **Checks release channel** — uses `clawhub inspect <slug>` to skip pre-releases when `skipPreRelease: true`
+5. **Updates skills** — runs `clawhub update <slug> --no-input` for each eligible installed skill
+6. **Protects local changes** — skips skills with uncommitted git changes
+7. **Respects skip list** — never touches skills in `skipSkills`
+8. **Restarts gateway** — only if OpenClaw version actually changed
+9. **Notifies** — sends a Telegram message or `openclaw system event` on completion or failure
 
 ## Change Schedule
 
