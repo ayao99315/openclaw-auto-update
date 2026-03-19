@@ -1,8 +1,13 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # install-cron.sh — Install/update the auto-update cron job
 # Usage: ./install-cron.sh [--schedule "0 2 * * *"] [--uninstall]
 
 set -euo pipefail
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Error: python3 required" >&2
+  exit 1
+fi
 
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 UPDATE_SCRIPT="$SKILL_DIR/scripts/update.sh"
@@ -41,18 +46,18 @@ print(cfg.get('schedule', ''))
   [[ -n "$SCHEDULE_FROM_CONFIG" ]] && SCHEDULE="$SCHEDULE_FROM_CONFIG"
 fi
 
-# Remove existing cron entry
-EXISTING=$(crontab -l 2>/dev/null | grep -v "$CRON_TAG" || true)
-
 if [[ "$UNINSTALL" == "true" ]]; then
-  echo "$EXISTING" | crontab -
+  { crontab -l 2>/dev/null | grep -Fv "ayao-updater" || true; } | crontab -
   echo "✅ Removed openclaw-auto-update cron job"
   exit 0
 fi
 
 # Add new cron entry
 NEW_CRON="$SCHEDULE bash $UPDATE_SCRIPT >> /tmp/openclaw-auto-update.log 2>&1 $CRON_TAG"
-printf '%s\n%s\n' "$EXISTING" "$NEW_CRON" | crontab -
+{
+  crontab -l 2>/dev/null | grep -Fv "ayao-updater" || true
+  echo "$NEW_CRON"
+} | crontab -
 
 echo "✅ Cron job installed: $SCHEDULE"
 echo "   Script: $UPDATE_SCRIPT"
