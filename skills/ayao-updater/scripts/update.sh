@@ -17,11 +17,23 @@ LOG_FILE="/tmp/openclaw-auto-update.log"
 DRY_RUN=false
 
 # ── Parse args ───────────────────────────────────────────────────────────────
-for arg in "$@"; do
-  case "$arg" in
-    --dry-run) DRY_RUN=true ;;
-    --config=*) CONFIG_FILE="${arg#--config=}" ;;
-    --config) shift; CONFIG_FILE="${1:-}" ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run)
+      DRY_RUN=true
+      shift
+      ;;
+    --config=*)
+      CONFIG_FILE="${1#--config=}"
+      shift
+      ;;
+    --config)
+      CONFIG_FILE="${2:?--config requires a value}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
   esac
 done
 
