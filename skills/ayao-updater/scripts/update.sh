@@ -1,7 +1,8 @@
 #!/bin/bash
 # openclaw-auto-update/scripts/update.sh
 # Automatically updates OpenClaw and installed skills.
-# Detects npm/pnpm, handles conflicts, respects skiplist, sends notifications.
+# Uses the built-in OpenClaw updater, handles conflicts, respects skiplist,
+# and sends notifications.
 #
 # Usage:
 #   ./update.sh [--dry-run] [--config /path/to/config.json]
@@ -72,34 +73,6 @@ for line in sys.stdin:
 # CLI --dry-run overrides config
 [[ "$DRY_RUN" == "true" ]] && CONFIG_DRYRUN=true
 
-# ── Detect package manager ────────────────────────────────────────────────────
-detect_pm() {
-  # 1. Check how openclaw binary was installed
-  local openclaw_bin
-  openclaw_bin=$(command -v openclaw 2>/dev/null || true)
-  if [[ -z "$openclaw_bin" ]]; then
-    echo "npm"  # fallback
-    return
-  fi
-
-  # Follow symlinks to find actual location
-  local real_path
-  real_path=$(python3 -c "import os; print(os.path.realpath('$openclaw_bin'))" 2>/dev/null || echo "$openclaw_bin")
-
-  if echo "$real_path" | grep -q "pnpm"; then
-    echo "pnpm"
-  elif echo "$real_path" | grep -q "yarn"; then
-    echo "yarn"
-  else
-    # Check if pnpm exists and manages global packages
-    if command -v pnpm &>/dev/null && pnpm list -g openclaw &>/dev/null 2>&1; then
-      echo "pnpm"
-    else
-      echo "npm"
-    fi
-  fi
-}
-
 # ── Notify helper ─────────────────────────────────────────────────────────────
 notify() {
   local msg="$1"
@@ -133,14 +106,37 @@ is_locally_modified() {
   return 1  # not modified
 }
 
+# ── Enumerate installed skills ────────────────────────────────────────────────
+list_installed_skills() {
+  local listed=false
+
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+      echo "$line"
+      listed=true
+      continue
+    fi
+
+    if [[ "$line" =~ ^([a-z0-9][a-z0-9-]*)[[:space:]]+ ]]; then
+      echo "${BASH_REMATCH[1]}"
+      listed=true
+    fi
+  done < <(clawhub list 2>/dev/null || true)
+
+  if [[ "$listed" == "true" ]]; then
+    return 0
+  fi
+
+  local workspace_skills_dir="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}/skills"
+  if [[ -d "$workspace_skills_dir" ]]; then
+    find "$workspace_skills_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | sort -u
+  fi
+}
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 main() {
   log_section "OpenClaw Auto Update"
   [[ "$CONFIG_DRYRUN" == "true" ]] && log "⚠️  DRY RUN MODE — no changes will be made"
-
-  local PM
-  PM=$(detect_pm)
-  log "Package manager: $PM"
 
   local openclaw_version_before
   openclaw_version_before=$(openclaw --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
@@ -148,20 +144,13 @@ main() {
 
   # ── Update OpenClaw ───────────────────────────────────────────────────────
   log_section "Updating OpenClaw"
-  local update_ok=true
   local new_version="$openclaw_version_before"
 
   if [[ "$CONFIG_DRYRUN" == "true" ]]; then
-    log "[DRY RUN] Would run: $PM install -g openclaw"
+    log "[DRY RUN] Would run: openclaw update --dry-run --yes --no-restart"
   else
     local install_output=""
-    if [[ "$PM" == "pnpm" ]]; then
-      install_output=$(pnpm add -g openclaw 2>&1) || { log "❌ openclaw update failed"; update_ok=false; }
-    elif [[ "$PM" == "yarn" ]]; then
-      install_output=$(yarn global add openclaw 2>&1) || { log "❌ openclaw update failed"; update_ok=false; }
-    else
-      install_output=$(npm install -g openclaw 2>&1) || { log "❌ openclaw update failed"; update_ok=false; }
-    fi
+    install_output=$(openclaw update --yes --no-restart 2>&1) || log "❌ openclaw update failed"
     log "$install_output"
 
     new_version=$(openclaw --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
@@ -180,28 +169,15 @@ main() {
   local skills_modified=0
   local skill_summary=""
 
-  # Update skills via clawhub sync (handles both lockfile-installed and workspace skills)
-  # clawhub sync --all auto-detects all skill roots including OpenClaw workspace
   if [[ "$CONFIG_DRYRUN" == "true" ]]; then
-    log "[DRY RUN] Would run: clawhub sync --all --bump patch"
-    # Show what would be updated
-    local sync_preview
-    sync_preview=$(clawhub sync --dry-run 2>/dev/null || true)
-    log "$sync_preview"
-    skill_summary="[Dry run — see log for details]"
+    log "[DRY RUN] Would run: clawhub update --all"
+    log "[DRY RUN] Installed clawhub does not support --dry-run for update; skipping skill preview."
+    skill_summary="[Dry run — clawhub update preview not supported]"
   else
-    # Build skip args
-    local skip_args=""
-    # clawhub update supports per-slug update; sync updates all
-    # We update slugs one by one to respect skiplist and modified check
-
-    # Get all known slugs from sync dry-run
     local all_slugs=()
-    while IFS= read -r line; do
-      local slug
-      slug=$(echo "$line" | grep -oE '^- [a-z0-9-]+' | sed 's/^- //' || true)
+    while IFS= read -r slug; do
       [[ -n "$slug" ]] && all_slugs+=("$slug")
-    done < <(clawhub sync --dry-run 2>/dev/null | grep "^- " || true)
+    done < <(list_installed_skills)
 
     if [[ ${#all_slugs[@]} -eq 0 ]]; then
       log "All skills already up to date (or no skills found)"
@@ -239,10 +215,6 @@ main() {
         skill_summary+="❌ $slug (failed)\n"
       fi
     done
-
-    # Also run sync to catch any workspace skills not in lockfile
-    log "Running clawhub sync for workspace skills..."
-    clawhub sync --all --bump patch --no-input 2>&1 | tee -a "$LOG_FILE" || true
   fi
 
   # ── Restart Gateway ───────────────────────────────────────────────────────
