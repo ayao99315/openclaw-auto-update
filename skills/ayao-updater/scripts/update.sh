@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # openclaw-auto-update/scripts/update.sh
 # Automatically updates OpenClaw and installed skills.
 # Uses the built-in OpenClaw updater, handles conflicts, respects skiplist,
@@ -10,6 +10,11 @@
 # Config file (JSON): See references/config-schema.md for all options.
 
 set -euo pipefail
+
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "Error: python3 required" >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CONFIG_FILE="${OPENCLAW_UPDATE_CONFIG:-$HOME/.openclaw/workspace/skills/openclaw-auto-update/config.json}"
@@ -43,8 +48,11 @@ log_section() { log ""; log "═══ $* ═══"; }
 
 # ── Load config ──────────────────────────────────────────────────────────────
 load_config() {
-  python3 - << EOF
-import json, os, sys
+  python3 - "$CONFIG_FILE" <<'PYEOF'
+import json
+import os
+import sys
+
 default = {
     "skipSkills": [],
     "skipPreRelease": True,
@@ -54,7 +62,7 @@ default = {
     "notifyTarget": None
 }
 cfg = default.copy()
-config_path = os.path.expanduser("${CONFIG_FILE}")
+config_path = os.path.expanduser(sys.argv[1])
 if os.path.exists(config_path):
     try:
         with open(config_path) as f:
@@ -64,22 +72,28 @@ if os.path.exists(config_path):
         print(f"WARN: Failed to load config: {e}", file=sys.stderr)
 for k, v in cfg.items():
     print(f"{k}={json.dumps(v)}")
-EOF
+PYEOF
 }
 
 # Parse config into shell variables
 eval "$(load_config | python3 -c "
-import sys, json
+import json
+import shlex
+import sys
+
 for line in sys.stdin:
     k, _, v = line.partition('=')
     v = v.strip()
     val = json.loads(v)
+    name = f'CONFIG_{k.upper()}'
     if isinstance(val, list):
-        print(f'CONFIG_{k.upper()}=({\" \".join(map(str, val))})')
+        items = ' '.join(shlex.quote(str(item)) for item in val)
+        print(f'{name}=({items})')
     elif isinstance(val, bool):
-        print(f'CONFIG_{k.upper()}={\"true\" if val else \"false\"}')
+        print(f'{name}={\"true\" if val else \"false\"}')
     else:
-        print(f'CONFIG_{k.upper()}={val if val is not None else \"\"}')
+        rendered = '' if val is None else shlex.quote(str(val))
+        print(f'{name}={rendered}')
 " 2>/dev/null)"
 
 # CLI --dry-run overrides config
@@ -100,7 +114,9 @@ notify() {
 # ── Check if skill is in skiplist ─────────────────────────────────────────────
 is_skipped() {
   local skill="$1"
+  local skip
   for skip in "${CONFIG_SKIPSKILLS[@]:-}"; do
+    [[ -z "$skip" ]] && continue
     [[ "$skill" == "$skip" ]] && return 0
   done
   return 1
@@ -143,6 +159,62 @@ list_installed_skills() {
   if [[ -d "$workspace_skills_dir" ]]; then
     find "$workspace_skills_dir" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null | sort -u
   fi
+}
+
+# ── Parse version from clawhub inspect output ────────────────────────────────
+parse_inspect_version() {
+  python3 -c '
+import json
+import re
+import sys
+
+text = sys.stdin.read().strip()
+version_re = re.compile(r"\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?\b")
+
+def find_version(value):
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key).lower() == "version":
+                match = version_re.search(str(item))
+                if match:
+                    return match.group(0)
+            nested = find_version(item)
+            if nested:
+                return nested
+        return None
+    if isinstance(value, list):
+        for item in value:
+            nested = find_version(item)
+            if nested:
+                return nested
+        return None
+    match = version_re.search(str(value))
+    return match.group(0) if match else None
+
+if text:
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = None
+
+    if parsed is not None:
+        version = find_version(parsed)
+        if version:
+            print(version)
+            sys.exit(0)
+
+    for line in text.splitlines():
+        if "version" not in line.lower():
+            continue
+        match = version_re.search(line)
+        if match:
+            print(match.group(0))
+            sys.exit(0)
+
+    match = version_re.search(text)
+    if match:
+        print(match.group(0))
+'
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -209,22 +281,32 @@ main() {
 
       # Pre-release check
       if [[ "$CONFIG_SKIPPRERELEASE" == "true" ]]; then
-        local latest
-        latest=$(clawhub inspect "$slug" 2>/dev/null | grep -i "version" | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+.*' | head -1 || true)
-        if echo "$latest" | grep -qE 'alpha|beta|rc|next|canary'; then
+        local inspect_output latest
+        if ! inspect_output=$(clawhub inspect "$slug" 2>&1); then
+          log "⚠️  Skipping $slug (clawhub inspect failed)"
+          [[ -n "$inspect_output" ]] && log "$inspect_output"
+          ((skills_skipped++)) || true
+          skill_summary+="⏭️ $slug (inspect failed)\n"
+          continue
+        fi
+
+        latest=$(printf '%s\n' "$inspect_output" | parse_inspect_version || true)
+        if [[ -z "$latest" ]]; then
+          log "⚠️  Could not parse version for $slug from clawhub inspect output; proceeding with update"
+        elif [[ "$latest" == *-* ]]; then
           log "⏭️  Skipping $slug (pre-release: $latest)"
           ((skills_skipped++)) || true
           skill_summary+="⏭️ $slug (pre-release)\n"
           continue
         fi
       fi
+
       if [[ -d "$skill_dir" ]] && is_locally_modified "$skill_dir"; then
         log "Skipping $slug — local modifications detected"
         ((skills_modified++)) || true
         skill_summary+="⚠️ $slug (local modifications detected)\n"
         continue
       fi
-
 
       log "🔄 Updating $slug..."
       if clawhub update "$slug" --no-input 2>&1 | tee -a "$LOG_FILE"; then
