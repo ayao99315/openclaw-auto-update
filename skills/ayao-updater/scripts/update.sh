@@ -234,12 +234,16 @@ main() {
     log "[DRY RUN] Would run: openclaw update --dry-run --yes --no-restart"
   else
     local install_output=""
-    install_output=$(openclaw update --yes --no-restart 2>&1) || log "❌ openclaw update failed"
+    install_output=$(openclaw update --yes --no-restart 2>&1) || true
     log "$install_output"
 
     new_version=$(openclaw --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || echo "unknown")
+    # openclaw update returns non-zero even when already up to date — check version instead
     if [[ "$new_version" != "$openclaw_version_before" ]]; then
       log "✅ OpenClaw updated: $openclaw_version_before → $new_version"
+    elif echo "$install_output" | grep -qiE "error|failed|ERR" && ! echo "$install_output" | grep -qiE "already up.to.date|no update|latest"; then
+      log "❌ openclaw update failed (see output above)"
+      update_ok=false
     else
       log "✅ OpenClaw already up to date ($new_version)"
     fi
