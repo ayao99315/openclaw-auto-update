@@ -47,7 +47,7 @@ print(cfg.get('schedule', ''))
 fi
 
 if [[ "$UNINSTALL" == "true" ]]; then
-  { crontab -l 2>/dev/null | grep -Fv "ayao-updater" || true; } | crontab -
+  { crontab -l 2>/dev/null | grep -Fv "$CRON_TAG" || true; } | crontab -
   echo "✅ Removed openclaw-auto-update cron job"
   exit 0
 fi
@@ -55,7 +55,7 @@ fi
 # Add new cron entry
 NEW_CRON="$SCHEDULE bash $UPDATE_SCRIPT >> /tmp/openclaw-auto-update.log 2>&1 $CRON_TAG"
 {
-  crontab -l 2>/dev/null | grep -Fv "ayao-updater" || true
+  crontab -l 2>/dev/null | grep -Fv "$CRON_TAG" || true
   echo "$NEW_CRON"
 } | crontab -
 
