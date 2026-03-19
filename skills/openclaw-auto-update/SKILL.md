@@ -1,5 +1,5 @@
 ---
-name: openclaw-auto-update
+name: openclaw-updater
 description: Automatically update OpenClaw and all installed skills on a schedule. Use when: (1) setting up automatic updates for OpenClaw or skills, (2) running a manual update check, (3) configuring update schedule, skip lists, or pre-release filtering, (4) user says "auto update", "schedule updates", "keep openclaw updated", "update skills automatically". Handles npm/pnpm/yarn detection, locally-modified skill protection, conflict avoidance, and Telegram notifications on completion or failure.
 ---
 
