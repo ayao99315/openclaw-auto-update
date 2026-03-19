@@ -7,13 +7,26 @@ set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 UPDATE_SCRIPT="$SKILL_DIR/scripts/update.sh"
 CRON_TAG="# openclaw-auto-update"
-SCHEDULE="${1:-0 2 * * *}"  # Default: 2 AM daily
+SCHEDULE="0 2 * * *"
 UNINSTALL=false
 
-for arg in "$@"; do
-  case "$arg" in
-    --uninstall) UNINSTALL=true ;;
-    --schedule=*) SCHEDULE="${arg#--schedule=}" ;;
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --uninstall)
+      UNINSTALL=true
+      shift
+      ;;
+    --schedule=*)
+      SCHEDULE="${1#--schedule=}"
+      shift
+      ;;
+    --schedule)
+      SCHEDULE="${2}"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
   esac
 done
 
