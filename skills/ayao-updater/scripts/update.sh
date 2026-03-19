@@ -187,6 +187,7 @@ main() {
     skill_summary="[Dry run — clawhub update preview not supported]"
   else
     local all_slugs=()
+    local workspace_skills_dir="${OPENCLAW_WORKSPACE:-$HOME/.openclaw/workspace}/skills"
     while IFS= read -r slug; do
       [[ -n "$slug" ]] && all_slugs+=("$slug")
     done < <(list_installed_skills)
@@ -196,6 +197,8 @@ main() {
     fi
 
     for slug in "${all_slugs[@]}"; do
+      local skill_dir="$workspace_skills_dir/$slug"
+
       # Skiplist check
       if is_skipped "$slug"; then
         log "⏭️  Skipping $slug (in skiplist)"
@@ -215,6 +218,13 @@ main() {
           continue
         fi
       fi
+      if [[ -d "$skill_dir" ]] && is_locally_modified "$skill_dir"; then
+        log "Skipping $slug — local modifications detected"
+        ((skills_modified++)) || true
+        skill_summary+="⚠️ $slug (local modifications detected)\n"
+        continue
+      fi
+
 
       log "🔄 Updating $slug..."
       if clawhub update "$slug" --no-input 2>&1 | tee -a "$LOG_FILE"; then
